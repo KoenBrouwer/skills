@@ -19,7 +19,7 @@ Bump dependencies with `npm-check-updates` (ncu), verify, commit, push and open 
 - Do not touch `node_modules`, build output, or generated files.
 - Read the repo's own agent instructions and README (`AGENTS.md`, `CLAUDE.md`, `README.md`) first. They win over this skill on conflicts.
 
-## Step 0: ask the target (every run)
+## Step 0: ask the target and PR strategy (every run)
 
 Ask the user with the question tool which ncu target to use:
 
@@ -28,6 +28,32 @@ Ask the user with the question tool which ncu target to use:
 - `latest` (includes majors)
 
 Do not assume a default.
+
+Then ask which PR strategy to use:
+
+- All in one PR except updates that required modifications (recommended)
+- All updates in one PR
+- Separate PR per impact (patch, minor, major)
+- One PR per package update (Dependabot style)
+
+See [Delivery strategy](#delivery-strategy) for what each means. In all mode, ask both once and pass them to every subagent.
+
+## Delivery strategy
+
+The run first happens once on a local working branch: decisions, bump, migrations, verification and cleanup (steps 1 to 9). The strategy only decides how the result is split into PRs in step 10.
+
+An update "required modifications" when it needed changes to source or config files beyond `package.json` and the lockfile: a migration executed with "Do it now" (step 5), or a swap that edited imports and usages (step 8). A plain removal does not count.
+
+| Strategy | PRs |
+|---|---|
+| All in one PR | One PR with everything. Cleanup stays a separate commit. |
+| Per impact | One PR each for patch, minor and major updates, plus one for the cleanup. Skip empty groups. Pinned updates, majors and their migrations follow their own impact. |
+| All in one except modified (recommended) | One PR with every update that needed no modifications, plus the cleanup removals. Every update that required modifications gets its own PR, together with its modifications. |
+| One PR per package | One PR per updated package, and one per removal or swap. |
+
+To make splitting possible, commit every update that required modifications as its own commit on the working branch, with its `package.json` and lockfile changes and its code changes. Commit everything else as in steps 7 and 8.
+
+Every PR branches off `origin/<default>` independently, never off another PR. Because PRs share the lockfile, merging one can conflict with another. Say so in the report and recommend merging them one at a time, rebasing each remaining branch onto `origin/<default>` after each merge.
 
 ## All mode: select repos
 
@@ -46,7 +72,7 @@ Subagents cannot ask the user questions. For anything that needs a decision (the
 1. Check `git status`. If the tree is dirty, stop and report.
 2. Detect the package manager from the lockfile: `pnpm-lock.yaml` → pnpm, `package-lock.json` → npm.
 3. If the repo needs an `.npmrc` for private packages and has none, copy its example file if there is one.
-4. Fetch and branch off the default branch: `git fetch origin`, then `git switch -c chore/update-npm-packages-YYYY-MM-DD origin/<default>` using today's date.
+4. Fetch and create the working branch off the default branch: `git fetch origin`, then `git switch -c chore/update-npm-packages-YYYY-MM-DD origin/<default>` using today's date. With the "All in one PR" strategy this is also the PR branch. Otherwise it stays local and PR branches are created in step 10.
 5. Install: `npm ci` or `pnpm install --frozen-lockfile`.
 6. Record the audit counts: `npm audit` or `pnpm audit`. Failures from the audit command are data, not errors.
 7. Detect a monorepo (`workspaces` in `package.json`, or `pnpm-workspace.yaml`). If so, pass `--workspaces` (plus `--root` when the root has dependencies) to ncu.
@@ -137,13 +163,13 @@ For each major update (current version → new version):
    - Do it now (recommended when every step is mechanical)
    - Keep the current version and save the plan for later
 7. Do it now:
-   - Apply the major, then execute the plan's steps (code changes).
+   - Apply the major, then execute the plan's steps (code changes), and commit them as their own commit with the package name in the message.
    - If a step is not mechanical, stop. Revert the major, keep the current version, and save the plan instead. Tell the user why.
    - Verification and bisecting happen in step 6.
 8. Keep the current version and save the plan:
    - Look for a documented format or process in the repo (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `README.md`, `docs/`, ADR or migration directories) and follow it.
    - If none is documented, ask the user where to save the plan. Offer the suggestion `docs/migrations/<package>-<from>-to-<to>.md`. Do not choose a location silently.
-   - Commit the saved plan in the same PR, in the bump commit.
+   - Commit the saved plan in the bump commit. It is delivered in the main PR (the first PR created, or the only one).
 
 ### 6. Verify
 
@@ -197,7 +223,7 @@ Runs after the bump is verified and committed. Changes go into a separate commit
    - Swap when mechanical: install the replacement, then edit imports and usages in the source.
    - Swap when the API differs: stop and record it as a follow-up. Do not guess the migration.
 7. Run the verification from step 6. If it fails, bisect and revert the offending removals or swaps like a bump, and list them as reverted.
-8. Commit following the repo's convention, for example `chore: remove obsolete and deprecated packages`.
+8. Commit following the repo's convention, for example `chore: remove obsolete and deprecated packages`. Commit each swap that edited source as its own commit, and put removals in one commit.
 
 ### 9. Audit
 
@@ -205,8 +231,25 @@ Run the audit again. Record the before and after counts for the PR.
 
 ### 10. Push and PR
 
+First decide the PR groups from the chosen strategy (see [Delivery strategy](#delivery-strategy)).
+
+For "All in one PR", push the working branch and open one PR.
+
+For every other strategy, build each PR on its own branch:
+
+1. Name the branch `chore/update-npm-packages-YYYY-MM-DD-<group>`, where `<group>` is `patch`, `minor`, `major`, `cleanup`, `main`, or the package name.
+2. Create it off `origin/<default>`.
+3. Re-apply only that group's updates at the exact versions from the working branch (`npm install <name>@<version>` or `pnpm add <name>@<version>`, keeping the existing range style). For a group that required modifications, also bring over its code commit (`git cherry-pick` the commit from the working branch).
+4. Add the approved `.ncurc.yml` and any saved migration plans to the first PR created.
+5. Install, then run the verification from step 6. If it fails, bisect and revert like a bump, and list the reverted packages in that PR.
+6. Commit, push and open the PR as below.
+
+Then add a list of the sibling PRs to each PR body (`gh pr edit`).
+
+For each PR:
+
 1. `git push --set-upstream origin <branch>` (use `--force-with-lease` on a re-run).
-2. Write the PR body. Include:
+2. Write the PR body. Include only that PR's content:
    - Target used.
    - Table of every updated package, always included, with columns Package, From, To, Type (`patch`, `minor` or `major`). Include pinned updates, applied majors, and swap replacements. Derive Type from the semver difference between From and To. Mark `0.x` changes by the same rule (the changed segment), and add a `(0.x)` note when a minor on a `0.x` package may be breaking.
    - Reverted packages and why.
@@ -214,11 +257,11 @@ Run the audit again. Record the before and after counts for the PR.
    - Pinned packages: updated, kept pinned, skipped.
    - Obsolete and deprecated packages: removed, swapped, kept, skipped, and non-mechanical swaps left as follow-up, each with its reason.
    - Verification run (lint, typecheck, unit, build) and that e2e was not run.
-   - Audit before → after.
+   - Audit before → after (for per-PR branches, measure on that PR's branch).
    - Whether `.ncurc.yml` was added.
 3. Open the PR with `gh pr create` against the default branch.
 4. Report the PR URL.
 
 ## Report
 
-Lead with the result. Per repo: PR link, bumped count, reverted packages, pinned decisions, majors left open, obsolete and deprecated decisions, audit delta, anything unverified. Do not describe a PR as released or deployed.
+Lead with the result. Per repo: PR links and what each contains, bumped count, reverted packages, pinned decisions, majors left open, obsolete and deprecated decisions, audit delta, anything unverified. Do not describe a PR as released or deployed.

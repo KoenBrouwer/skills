@@ -41,7 +41,7 @@ Or across several repos:
 
 ### What it does
 
-1. Asks which ncu target to use: `minor`, `patch` or `latest`. It asks on every run.
+1. Asks which ncu target to use (`minor`, `patch` or `latest`) and which PR strategy to use. It asks on every run.
 2. Creates branch `chore/update-npm-packages-YYYY-MM-DD` off up-to-date `origin/<default>`.
 3. Installs, then records the audit counts.
 4. Bumps with ncu. It uses the global `ncu` when installed, otherwise `npx npm-check-updates`. It adds `--packageManager pnpm` for pnpm repos and `--workspaces` for monorepos.
@@ -51,7 +51,7 @@ Or across several repos:
 8. When a check fails, it bisects, reverts the offending packages and re-verifies.
 9. Commits the bump.
 10. Checks for deprecated and unused or obsolete packages, asks per package, applies the choices, verifies, and commits separately.
-11. Pushes and opens a PR that lists:
+11. Pushes and opens the PR or PRs, as the chosen strategy dictates. Each PR lists:
     - updated packages in a table (package, from, to, patch/minor/major)
     - reverted packages
     - pinned package decisions
@@ -77,6 +77,19 @@ It asks about every pin on every run, including packages already in a `reject` l
 - **Skip this run.**
 
 A pin whose update is also a major gets a single question.
+
+### PR strategy
+
+You choose per run:
+
+| Strategy | PRs |
+|---|---|
+| All in one PR | One PR with everything. |
+| Per impact | One PR each for patch, minor and major updates, plus one for the cleanup. |
+| All in one except modified (recommended) | One PR for every update that needed no modifications, and one PR per update that required code or config changes, such as an executed migration or a swap. |
+| One PR per package | One PR per updated package, like Dependabot. |
+
+Each PR branches off `origin/<default>` independently and is verified on its own. Shared lockfile changes can conflict, so merge them one at a time and rebase the rest.
 
 ### Major updates and migrations
 
