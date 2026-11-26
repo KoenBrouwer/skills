@@ -46,7 +46,7 @@ Or across several repos:
 3. Installs, then records the audit counts.
 4. Bumps with ncu. It uses the global `ncu` when installed, otherwise `npx npm-check-updates`. It adds `--packageManager pnpm` for pnpm repos and `--workspaces` for monorepos.
 5. Asks per pinned package (exact versions, overrides) whether to update, keep pinned or skip, showing the version gap and the git history of the pin.
-6. Lists available major versions that were not applied, and asks per package which to attempt.
+6. Lists available major versions that were not applied, and asks per package which to attempt. Each chosen major gets a [migration analysis](#major-updates-and-migrations).
 7. Runs the repo's lint, typecheck, unit tests and build. It does not run e2e.
 8. When a check fails, it bisects, reverts the offending packages and re-verifies.
 9. Commits the bump.
@@ -55,7 +55,7 @@ Or across several repos:
     - updated packages in a table (package, from, to, patch/minor/major)
     - reverted packages
     - pinned package decisions
-    - majors left open
+    - majors applied and left open, with migration evidence and saved plans
     - obsolete and deprecated package decisions
     - audit counts before and after
 
@@ -77,6 +77,21 @@ It asks about every pin on every run, including packages already in a `reject` l
 - **Skip this run.**
 
 A pin whose update is also a major gets a single question.
+
+### Major updates and migrations
+
+For every major update, including pinned packages and the `latest` target, the skill:
+
+1. Finds the changelog for the whole version range: the package repo (releases, `CHANGELOG.md`, migration guide), the docs site, then the published tarball.
+2. Checks which breaking changes affect the repo.
+3. Applies the major without a plan when nothing affects the repo, and records "no migration needed" with the evidence in the PR.
+4. Otherwise writes a migration plan and asks: do it now, or keep the current version and save the plan for later.
+
+"Do it now" applies the major and executes the plan, then verifies. If a step is not mechanical, it reverts the major and saves the plan instead.
+
+A saved plan follows the repo's documented format or process. If none is documented, the skill asks you where to save it, suggesting `docs/migrations/<package>-<from>-to-<to>.md`. The plan is committed in the same PR.
+
+If no changelog is found, the skill tells you and asks whether to apply the major anyway or keep the current version.
 
 ### Obsolete and deprecated packages
 

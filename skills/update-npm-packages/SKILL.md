@@ -37,7 +37,7 @@ Do not assume a default.
 4. Start one parallel subagent per confirmed repo. Each prompt must contain: the repo path, the chosen target, the full procedure below and the rules above.
 5. Collect each subagent's summary (PR link, bumped, reverted, majors left, audit delta, failures) and report them together.
 
-Subagents cannot ask the user questions. For anything that needs a decision (the `.ncurc.yml` draft, the pinned-package questions, the per-package major choice, the obsolete and deprecated package choices), the subagent stops before that step and returns the draft or list with evidence. The main agent asks the user, batched per repo, and sends the answers back to the same subagent.
+Subagents cannot ask the user questions. For anything that needs a decision (the `.ncurc.yml` draft, the pinned-package questions, the per-package major choice, the migration plan decision and plan location, the obsolete and deprecated package choices), the subagent stops before that step and returns the draft or list with evidence. The main agent asks the user, batched per repo, and sends the answers back to the same subagent.
 
 ## Procedure per repo
 
@@ -98,7 +98,7 @@ Ask about every pinned package, including those already in a `reject` list in `.
 6. For "Keep pinned", ask whether to persist it in `reject` in `.ncurc.yml`. Decide per package, every run. Write nothing without an answer. If not persisted, exclude it for this run only via `--reject`.
 7. "Skip this run" behaves like "Keep pinned" for this run, without the persistence question.
 8. Apply the updates:
-   - Dependencies: `ncu --target <target> -u --filter <package>` (add `--target latest` for an approved major). For a `^` range, edit the version in `package.json` to the new version with a `^` prefix.
+   - Dependencies: `ncu --target <target> -u --filter <package>` (add `--target latest` for an approved major, after the migration analysis in step 5). For a `^` range, edit the version in `package.json` to the new version with a `^` prefix.
    - Overrides, `resolutions` and `pnpm.overrides`: ncu does not touch these. Edit the entry in `package.json` to the chosen version, then install.
 9. Install (`npm install` or `pnpm install`) after the edits.
 10. Treat each updated pin as its own bisect candidate in step 6.
@@ -108,18 +108,42 @@ Ask about every pinned package, including those already in a `reject` list in `.
 1. Use the global `ncu` if `command -v ncu` finds it. Otherwise use `npx npm-check-updates`.
 2. Add `--packageManager pnpm` for pnpm repos.
 3. Reject every pinned package for this step, so ncu does not bump pins the user has not approved: `--reject <name1>,<name2>`. Packages the user chose to update in step 3 are already handled.
-4. Preview first: `ncu --target <target> --reject <pins>` (no `-u`). Show the proposed changes.
-5. Apply: `ncu --target <target> --reject <pins> -u`.
+4. Preview first: `ncu --target <ncu-target> --reject <pins>` (no `-u`). Show the proposed changes. `<ncu-target>` is the chosen target, except `latest`, which is run as `minor` here. Majors are always handled in step 5.
+5. Apply: `ncu --target <ncu-target> --reject <pins> -u`.
 6. Install again (`npm install` or `pnpm install`) to refresh the lockfile.
 
 ### 5. Majors
 
-Skipped when the target is `latest`.
+Every major update goes through this step, including when the target is `latest`, and including pinned packages that the user chose to update in step 3.
 
 1. Run `ncu --target latest --reject <pins>` (no `-u`) to list available majors that were not applied. Pinned packages with a major available were already asked in step 3.
 2. Show the list and ask the user per package which to attempt.
-3. Apply each chosen major with `ncu --target latest -u --filter <package>`, then install.
-4. Treat each major as its own bisect candidate in step 6.
+3. For each chosen major, run the migration analysis below before applying it.
+4. Treat each applied major as its own bisect candidate in step 6.
+
+#### Migration analysis
+
+For each major update (current version → new version):
+
+1. Find the changelog covering every version in the range, in this order:
+   - The GitHub releases, `CHANGELOG.md` or migration/upgrade guide in the package repo. Get the repo URL from `npm view <name> repository.url`.
+   - The docs site linked from the registry (`npm view <name> homepage`).
+   - The `CHANGELOG`, `HISTORY` or `MIGRATION` file in the published tarball (download it with `npm pack <name>@<new>` in a temporary directory and inspect it).
+2. If no changelog is found, say so and ask the user whether to apply the major anyway or keep the current version. Do not write a plan.
+3. Read the breaking changes and decide which affect this repo: search the source for the removed or changed APIs, config keys, peer dependency ranges, and engine requirements.
+4. If nothing affects the repo, apply the major (`ncu --target latest -u --filter <package>`, then install) without asking about a plan. Record "no migration needed" with the evidence (the changelog link and what you checked) for the PR.
+5. If migration is needed, write a migration plan: the changelog links, each breaking change that affects the repo, the files and usages to change, the steps in order, and how to verify.
+6. Ask the user with the question tool, per package:
+   - Do it now (recommended when every step is mechanical)
+   - Keep the current version and save the plan for later
+7. Do it now:
+   - Apply the major, then execute the plan's steps (code changes).
+   - If a step is not mechanical, stop. Revert the major, keep the current version, and save the plan instead. Tell the user why.
+   - Verification and bisecting happen in step 6.
+8. Keep the current version and save the plan:
+   - Look for a documented format or process in the repo (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `README.md`, `docs/`, ADR or migration directories) and follow it.
+   - If none is documented, ask the user where to save the plan. Offer the suggestion `docs/migrations/<package>-<from>-to-<to>.md`. Do not choose a location silently.
+   - Commit the saved plan in the same PR, in the bump commit.
 
 ### 6. Verify
 
@@ -186,7 +210,7 @@ Run the audit again. Record the before and after counts for the PR.
    - Target used.
    - Table of every updated package, always included, with columns Package, From, To, Type (`patch`, `minor` or `major`). Include pinned updates, applied majors, and swap replacements. Derive Type from the semver difference between From and To. Mark `0.x` changes by the same rule (the changed segment), and add a `(0.x)` note when a minor on a `0.x` package may be breaking.
    - Reverted packages and why.
-   - Majors applied and majors left open.
+   - Majors applied (with "no migration needed" evidence or the migration done) and majors left open, with saved migration plans and their location.
    - Pinned packages: updated, kept pinned, skipped.
    - Obsolete and deprecated packages: removed, swapped, kept, skipped, and non-mechanical swaps left as follow-up, each with its reason.
    - Verification run (lint, typecheck, unit, build) and that e2e was not run.
