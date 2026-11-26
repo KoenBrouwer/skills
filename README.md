@@ -8,7 +8,15 @@ Agent skills for [OpenCode](https://opencode.ai) and other agents that read `SKI
 
 ## Install
 
-Copy or symlink a skill directory into your agent's skills directory. For OpenCode:
+With the [skills CLI](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills add KoenBrouwer/skills --skill update-npm-packages
+```
+
+Add `-g` to install globally.
+
+Or copy or symlink a skill directory into your agent's skills directory. For OpenCode:
 
 ```sh
 ln -s "$PWD/skills/update-npm-packages" ~/.config/opencode/skills/update-npm-packages
